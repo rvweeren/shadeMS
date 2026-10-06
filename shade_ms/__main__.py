@@ -81,12 +81,17 @@ def cli():
         help="Do not show conjugate points in u,v plots (default = plot conjugates).")
 
     group_opts = parser.add_argument_group("Plot axes setup")
+    group_opts.add_argument("--polar", action="store_true",
+        help="""Convert the selected Cartesian axes to angle and radius.
+             Preserves circles centred at the origin; see --rscale.""")
+    group_opts.add_argument("--rscale", choices=("linear", "symlog"),
+        help="Radial scale for --polar (default = symlog).")
     group_opts.add_argument("--xscale", choices=("linear", "symlog"), default="linear",
         help="X-axis scale, applied to all plots (default = %(default)s).")
     group_opts.add_argument("--yscale", choices=("linear", "symlog"), default="linear",
         help="Y-axis scale, applied to all plots (default = %(default)s).")
     group_opts.add_argument("--linthresh", type=positive_float, default=1.0,
-        help="""Symlog linear-region threshold for both axes, in their respective axis units.
+        help="""Symlog linear-region threshold in axis units (radius units for --polar).
              The interval from -linthresh to +linthresh is linear;
              outside it the scale is logarithmic (default = %(default)s).""")
     group_opts.add_argument("--xmin", action="append",
@@ -371,6 +376,10 @@ def parse_plot_spec(parser, options):
     yaxes = unpack_axis(options.yaxis, 'DATA:amp')
     if len(xaxes) != len(yaxes):
         parser.error("--xaxis and --yaxis must be given the same number of times")
+    if options.polar and (options.xscale != "linear" or options.yscale != "linear"):
+        parser.error("--polar uses --rscale, not --xscale/--yscale")
+    if options.rscale is not None and not options.polar:
+        parser.error("--rscale requires --polar")
 
     # get list of columns and plot limits of the same length
     param_desc = {

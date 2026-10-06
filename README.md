@@ -88,6 +88,41 @@ original data units. Symlog changes the spatial axes, not the colour/intensity
 normalization controlled by `--norm`. Conjugate uv points are still shown unless
 `--noconj` is supplied.
 
+### Circle-preserving polar uv-coverage
+
+Cartesian symlog axes stretch the two coordinates independently, so circles
+centred at the origin do not remain circular. Use `--polar` for a semi-log
+polar plot instead:
+
+```
+$ shadems --xaxis u --yaxis v --polar --linthresh 100 <msname>
+```
+
+The input axes are still Cartesian u and v. The plot converts them to
+`theta = atan2(v, u)` and `r = sqrt(u**2 + v**2)`, and only the radius is scaled.
+Angles are unchanged: 0 degrees lies along positive u, 90 degrees along
+positive v, and conjugate points are 180 degrees apart. Circles centred at
+the origin remain circular, even with a rectangular canvas.
+
+The radial scale defaults to `symlog`: radii from 0 to `--linthresh` are linear,
+and larger radii are logarithmic. The threshold and radial tick labels are in
+the original units (wavelengths for u/v). Zero radius is supported. For a
+fully linear polar plot, add `--rscale linear`; `--rscale symlog` explicitly
+selects the semi-log mode.
+
+`--polar` requires continuous Cartesian axes with matching units. It cannot
+be combined with Cartesian `--xscale symlog` or `--yscale symlog`; use
+`--rscale` instead. The setting applies to all plots in the invocation.
+Cartesian limits (`--xmin`, `--xmax`, `--ymin`, `--ymax`), including cached
+limits, filter the original input points before polar conversion. The radial
+display runs from zero to the largest selected radius, with a small margin.
+Colour values, intensity reductions, flags, and conjugate handling are unchanged.
+
+In polar mode, markup uses polar coordinates: angles are in **radians**, and
+radii are in original data units. Thus `--vline` marks an angle, `--hline`
+marks a radius, and `--markup` arguments follow Matplotlib's polar axes API.
+Density is counted per angular/radial raster bin, not per unit uv area.
+
 ### Sergeant Colon 
 
 * For complex-valued columns such as in the `DATA` example above, a single component (`amp`, `phase`, `real` or `imag`) must be provided using the colon delimiter. You can also use the 
@@ -238,13 +273,17 @@ Plot types and data sources:
                         plot conjugates).
 
 Plot axes setup:
+  --polar               Convert Cartesian input axes to angle and radius.
+                        Preserves origin-centred circles.
+  --rscale {linear,symlog}
+                        Radial scale for --polar (default = symlog).
   --xscale {linear,symlog}
                         X-axis scale for all plots (default = linear).
   --yscale {linear,symlog}
                         Y-axis scale for all plots (default = linear).
   --linthresh LINTHRESH
                         Positive symlog linear-region threshold in axis units
-                        for both axes (default = 1.0).
+                        (radius units for --polar; default = 1.0).
   --xmin XMIN           Minimum x-axis value (default = data min). For
                         multiple plots, you can give this multiple times, or
                         use a comma-separated list, but note that the clipping

@@ -44,6 +44,34 @@ def _symlog_partition(series, transform):
                      index=series.index, name=series.name)
 
 
+def validate_plot_axes(options, xdatum, ydatum):
+    if getattr(options, "polar", False):
+        if xdatum.is_discrete or ydatum.is_discrete:
+            raise ValueError("--polar requires two continuous Cartesian axes")
+        if xdatum.mapper.unit != ydatum.mapper.unit:
+            raise ValueError("--polar requires Cartesian axes with matching units")
+
+
+def _temporary_column(ddf, name):
+    while name in ddf.columns:
+        name += "_"
+    return name
+
+
+def _polar_coordinates(ddf, xaxis, yaxis, bounds):
+    selected = ddf[
+        (ddf[xaxis] >= bounds[xaxis][0]) & (ddf[xaxis] <= bounds[xaxis][1]) &
+        (ddf[yaxis] >= bounds[yaxis][0]) & (ddf[yaxis] <= bounds[yaxis][1])
+    ]
+    theta = _temporary_column(selected, "__shadems_theta")
+    radius = _temporary_column(selected, "__shadems_radius")
+    selected = selected.assign(**{
+        theta: np.mod(np.arctan2(selected[yaxis], selected[xaxis]), 2 * np.pi),
+        radius: np.hypot(selected[xaxis], selected[yaxis]),
+    })
+    return selected, theta, radius
+
+
 def get_colormap(cmap_name):
     cmap = getattr(colorcet, cmap_name, None)
     if cmap:
@@ -285,6 +313,8 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
                 minmax_cache=None,
                 options=None):
 
+    validate_plot_axes(options, xdatum, ydatum)
+    polar = getattr(options, "polar", False)
     figx = options.xcanvas / 60
     figy = options.ycanvas / 60
     bgcol = "#" + options.bgcol.lstrip("#")
@@ -327,17 +357,32 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
     transforms = []
     render_axes = []
     render_bounds = []
-    for dimension, axis in (("x", xaxis), ("y", yaxis)):
-        scale = getattr(options, f"{dimension}scale", "linear")
+    if polar:
+        ddf, theta, radius = _polar_coordinates(ddf, xaxis, yaxis, bounds)
+        log.info(": scanning polar radius maximum")
+        rmax = ddf[radius].max().compute()
+        if not np.isfinite(rmax):
+            log.info(": no valid data in plot. Check your flags and/or plot limits.")
+            return None
+        radial_scale = options.rscale or "symlog"
+        if rmax == 0:
+            rmax = options.linthresh if radial_scale == "symlog" else 1.0
+        spatial_axes = (theta, radius)
+        spatial_bounds = ((0, 2 * np.pi), (0, rmax))
+        spatial_scales = ("linear", radial_scale)
+    else:
+        spatial_axes = (xaxis, yaxis)
+        spatial_bounds = (bounds[xaxis], bounds[yaxis])
+        spatial_scales = (getattr(options, "xscale", "linear"),
+                          getattr(options, "yscale", "linear"))
+    for dimension, axis, axis_bounds, scale in zip(
+            ("x", "y"), spatial_axes, spatial_bounds, spatial_scales):
         transform = None
         render_axis = axis
-        axis_bounds = bounds[axis]
         if scale == "symlog":
             transform = SymmetricalLogTransform(
                 base=10, linthresh=options.linthresh, linscale=1)
-            render_axis = f"__shadems_{dimension}_symlog"
-            while render_axis in ddf.columns:
-                render_axis += "_"
+            render_axis = _temporary_column(ddf, f"__shadems_{dimension}_symlog")
             ddf = ddf.assign(**{
                 render_axis: ddf[axis].map_partitions(
                     _symlog_partition, transform, meta=(render_axis, "float64"))
@@ -512,7 +557,7 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
     log.debug('rendering image')
 
     fig = pylab.figure(figsize=(figx, figy))
-    ax = fig.add_subplot(111, facecolor=bgcol)
+    ax = fig.add_subplot(111, facecolor=bgcol, projection="polar" if polar else None)
 
     for funcname, args, kwargs in extra_markup:
         getattr(ax, funcname)(*args, **kwargs)
@@ -522,7 +567,7 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
     compute_arrays = dict(filter(lambda x: isinstance(x[1], da.Array), limits.items()))
     limits.update(dict(zip(compute_arrays.keys(), da.compute(*compute_arrays.values()))))
 
-    if any(transform is not None for transform in transforms):
+    if polar or any(transform is not None for transform in transforms):
         edges = []
         for dimension, transform, axis_bounds, size in zip(
                 ("x", "y"), transforms, render_bounds, canvas_sizes):
@@ -533,7 +578,7 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
             edges.append(axis_edges)
         ax.pcolormesh(*edges, rgb.data.astype(float) / 255,
                       shading="flat", rasterized=True)
-        ax.set_aspect("auto")
+        ax.set_aspect("equal" if polar else "auto")
     else:
         ax.imshow(X=rgb.data,
                   extent=[limits['xmin'],
@@ -545,20 +590,38 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
                   interpolation='nearest')
 
     ax.set_title("\n".join(textwrap.wrap(title, 90)), loc='center', fontdict=dict(fontsize=options.fontsize))
-    ax.set_xlabel(xlabel, fontdict=dict(fontsize=options.fontsize))
-    ax.set_ylabel(ylabel, fontdict=dict(fontsize=options.fontsize))
+    if polar:
+        ax.set_xlabel(
+            f"Angle from {xdatum.fullname} toward {ydatum.fullname} (degrees)",
+            fontdict=dict(fontsize=options.fontsize))
+        radial_label = "Radius"
+        if xdatum.mapper.unit:
+            radial_label += f" ({xdatum.mapper.unit})"
+        ax.set_ylabel(radial_label, fontdict=dict(fontsize=options.fontsize))
+    else:
+        ax.set_xlabel(xlabel, fontdict=dict(fontsize=options.fontsize))
+        ax.set_ylabel(ylabel, fontdict=dict(fontsize=options.fontsize))
     # ax.plot(xmin,ymin,'.',alpha=0.0)
     # ax.plot(xmax,ymax,'.',alpha=0.0)
 
-    dx, dy = limits['xmax'] - limits['xmin'], limits['ymax'] - limits['ymin']
-    ax.set_xlim([limits['xmin'] - dx/100, limits['xmax'] + dx/100])
-    ax.set_ylim([limits['ymin'] - dy/100, limits['ymax'] + dy/100])
-    for dimension, transform, axis_bounds in zip(("x", "y"), transforms, render_bounds):
-        if transform is not None:
-            delta = (axis_bounds[1] - axis_bounds[0]) / 100
-            padded_bounds = transform.inverted().transform(
-                np.array([axis_bounds[0] - delta, axis_bounds[1] + delta]))
-            getattr(ax, f"set_{dimension}lim")(padded_bounds)
+    if polar:
+        radial_bounds = np.array([0, render_bounds[1][1] * 1.01])
+        if transforms[1] is not None:
+            radial_bounds = transforms[1].inverted().transform(radial_bounds)
+        ax.set_ylim(radial_bounds)
+        ax.set_rorigin(0)
+        ax.set_xlim(0, 2 * np.pi)
+        ax.grid(True)
+    else:
+        dx, dy = limits['xmax'] - limits['xmin'], limits['ymax'] - limits['ymin']
+        ax.set_xlim([limits['xmin'] - dx/100, limits['xmax'] + dx/100])
+        ax.set_ylim([limits['ymin'] - dy/100, limits['ymax'] + dy/100])
+        for dimension, transform, axis_bounds in zip(("x", "y"), transforms, render_bounds):
+            if transform is not None:
+                delta = (axis_bounds[1] - axis_bounds[0]) / 100
+                padded_bounds = transform.inverted().transform(
+                    np.array([axis_bounds[0] - delta, axis_bounds[1] + delta]))
+                getattr(ax, f"set_{dimension}lim")(padded_bounds)
 
     def decimate_list(x, maxel):
         """Helper function to reduce a list to < given max number of elements, dividing it by decimal factors of 2 and 5"""

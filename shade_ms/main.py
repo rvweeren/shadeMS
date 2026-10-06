@@ -327,6 +327,10 @@ def main(argv):
                                        minmax_cache=minmax_cache if options.xlim_load else None)
             ydatum = DataAxis.register(yfunction, ycolumn, plot_ycorr, ms=ms, minmax=(ymin, ymax), subset=subset,
                                        minmax_cache=minmax_cache if options.ylim_load else None)
+            try:
+                data_plots.validate_plot_axes(options, xdatum, ydatum)
+            except ValueError as exc:
+                parser.error(str(exc))
             adatum = afunction and DataAxis.register(afunction, acolumn, plot_acorr, ms=ms,
                                                      minmax=(amin, amax), subset=subset)
             cdatum = cfunction and DataAxis.register(cfunction, ccolumn, plot_ccorr, ms=ms,
