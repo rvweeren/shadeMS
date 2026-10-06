@@ -331,6 +331,10 @@ def main(argv):
                 data_plots.validate_plot_axes(options, xdatum, ydatum)
             except ValueError as exc:
                 parser.error(str(exc))
+            if (options.polar and options.r_min is not None and
+                    options.r_min.unit == "m" and xdatum.mapper.unit == "wavelengths"):
+                wavelength = DataAxis.register("WAVEL", None, False, ms=ms, subset=subset)
+                options.polar_wavelength_label = wavelength.label
             adatum = afunction and DataAxis.register(afunction, acolumn, plot_acorr, ms=ms,
                                                      minmax=(amin, amax), subset=subset)
             cdatum = cfunction and DataAxis.register(cfunction, ccolumn, plot_ccorr, ms=ms,

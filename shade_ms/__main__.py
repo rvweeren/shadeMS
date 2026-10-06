@@ -3,7 +3,9 @@
 import argparse
 import itertools
 import numpy
+import re
 from importlib.metadata import version, PackageNotFoundError
+from typing import NamedTuple
 
 from . import DEFAULT_CNUM, DEFAULT_NUM_RENDERS
 
@@ -26,6 +28,29 @@ def positive_float(value):
     if not numpy.isfinite(result) or result <= 0:
         raise argparse.ArgumentTypeError("must be a finite number greater than zero")
     return result
+
+
+class RadialMinimum(NamedTuple):
+    value: float
+    unit: str
+
+
+def parse_radial_minimum(value):
+    match = re.fullmatch(r"(.*?)\s*(km|m)?", value.strip(), flags=re.IGNORECASE)
+    message = "must be a finite nonnegative radius, optionally followed by m or km"
+    if match is None:
+        raise argparse.ArgumentTypeError(message)
+    try:
+        number = float(match.group(1))
+    except ValueError:
+        raise argparse.ArgumentTypeError(message) from None
+    unit = (match.group(2) or "").lower()
+    if unit == "km":
+        number *= 1000
+        unit = "m"
+    if not numpy.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError(message)
+    return RadialMinimum(number, unit)
 
 
 def cli():
@@ -86,6 +111,12 @@ def cli():
              Preserves circles centred at the origin; see --rscale.""")
     group_opts.add_argument("--rscale", choices=("linear", "symlog"),
         help="Radial scale for --polar (default = symlog).")
+    group_opts.add_argument("--r_min", "--r-min", type=parse_radial_minimum,
+        help="""Minimum radius for --polar (default = 0), inclusive.
+             A bare number uses axis units; m/km suffixes specify physical distance,
+             e.g. --r_min 5km. For u/v this is projected uv distance,
+             converted using each channel's wavelength.
+             The lower display radius is mapped to the plot centre.""")
     group_opts.add_argument("--xscale", choices=("linear", "symlog"), default="linear",
         help="X-axis scale, applied to all plots (default = %(default)s).")
     group_opts.add_argument("--yscale", choices=("linear", "symlog"), default="linear",
@@ -380,6 +411,8 @@ def parse_plot_spec(parser, options):
         parser.error("--polar uses --rscale, not --xscale/--yscale")
     if options.rscale is not None and not options.polar:
         parser.error("--rscale requires --polar")
+    if options.r_min is not None and not options.polar:
+        parser.error("--r_min requires --polar")
 
     # get list of columns and plot limits of the same length
     param_desc = {

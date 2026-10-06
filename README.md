@@ -115,8 +115,32 @@ be combined with Cartesian `--xscale symlog` or `--yscale symlog`; use
 `--rscale` instead. The setting applies to all plots in the invocation.
 Cartesian limits (`--xmin`, `--xmax`, `--ymin`, `--ymax`), including cached
 limits, filter the original input points before polar conversion. The radial
-display runs from zero to the largest selected radius, with a small margin.
+display runs from zero to the largest selected radius, with a small margin,
+unless a minimum radius is specified.
 Colour values, intensity reductions, flags, and conjugate handling are unchanged.
+
+Use `--r_min` (or `--r-min`) to exclude the inner region:
+
+```
+$ shadems --xaxis u --yaxis v --polar --linthresh 100 --r_min 5km <msname>
+```
+
+A bare value is in the plotted axis units, e.g. `--r_min 2000` means 2000
+wavelengths for u/v. An `m` or `km` suffix specifies physical distance:
+`5km` and `5000m` are equivalent. Values must be finite and nonnegative;
+the default is zero and points exactly at the cutoff are included.
+
+For u/v, physical cutoffs refer to **projected uv distance**, not the full
+three-dimensional antenna separation. Conversion uses each channel's wavelength,
+so a 5 km cutoff is consistent across the frequency band. Physical suffixes
+are also supported when both Cartesian axes are already in m or km.
+Radial tick labels and `--linthresh` stay in the original axis units.
+
+The lower display radius is mapped to the centre of the polar plot, expanding
+the retained radial range while keeping origin-centred circles circular.
+For a physical cutoff on wavelength axes, the display floor is the smallest
+corresponding wavelength-space cutoff across the selected channels; each point
+is still filtered with its own channel-specific cutoff.
 
 In polar mode, markup uses polar coordinates: angles are in **radians**, and
 radii are in original data units. Thus `--vline` marks an angle, `--hline`
@@ -277,6 +301,10 @@ Plot axes setup:
                         Preserves origin-centred circles.
   --rscale {linear,symlog}
                         Radial scale for --polar (default = symlog).
+  --r_min R_MIN, --r-min R_MIN
+                        Inclusive minimum polar radius (default = 0).
+                        Bare values use axis units; m/km specify physical
+                        projected uv distance, e.g. --r_min 5km.
   --xscale {linear,symlog}
                         X-axis scale for all plots (default = linear).
   --yscale {linear,symlog}

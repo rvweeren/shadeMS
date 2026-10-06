@@ -50,6 +50,13 @@ def validate_plot_axes(options, xdatum, ydatum):
             raise ValueError("--polar requires two continuous Cartesian axes")
         if xdatum.mapper.unit != ydatum.mapper.unit:
             raise ValueError("--polar requires Cartesian axes with matching units")
+        minimum = getattr(options, "r_min", None)
+        if minimum is not None and minimum.unit == "m":
+            if xdatum.mapper.unit == "wavelengths":
+                if {xdatum.function, ydatum.function} != {"u", "v"}:
+                    raise ValueError("--r_min in m/km requires u/v axes when using wavelengths")
+            elif xdatum.mapper.unit not in {"m", "km"}:
+                raise ValueError("--r_min in m/km requires u/v axes or axes in m/km")
 
 
 def _temporary_column(ddf, name):
@@ -70,6 +77,24 @@ def _polar_coordinates(ddf, xaxis, yaxis, bounds):
         radius: np.hypot(selected[xaxis], selected[yaxis]),
     })
     return selected, theta, radius
+
+
+def _clip_polar_radius(ddf, radius, xdatum, options):
+    minimum = getattr(options, "r_min", None)
+    rmin = minimum.value if minimum is not None else 0.0
+    if minimum is not None and minimum.unit == "m":
+        if xdatum.mapper.unit == "wavelengths":
+            wavelength = getattr(options, "polar_wavelength_label", None)
+            if wavelength is None or wavelength not in ddf.columns:
+                raise ValueError("--r_min in m/km requires channel wavelengths for u/v")
+            thresholds = rmin / ddf[wavelength]
+            selected = ddf[ddf[radius] >= thresholds]
+            rmin, rmax = da.compute(thresholds.min(), selected[radius].max())
+            return selected, rmin, rmax
+        if xdatum.mapper.unit == "km":
+            rmin /= 1000
+    selected = ddf[ddf[radius] >= rmin]
+    return selected, rmin, selected[radius].max().compute()
 
 
 def get_colormap(cmap_name):
@@ -359,16 +384,18 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
     render_bounds = []
     if polar:
         ddf, theta, radius = _polar_coordinates(ddf, xaxis, yaxis, bounds)
-        log.info(": scanning polar radius maximum")
-        rmax = ddf[radius].max().compute()
-        if not np.isfinite(rmax):
+        log.info(": scanning polar radius bounds")
+        ddf, rmin, rmax = _clip_polar_radius(ddf, radius, xdatum, options)
+        if not np.isfinite(rmin) or not np.isfinite(rmax):
             log.info(": no valid data in plot. Check your flags and/or plot limits.")
             return None
+        log.info(f": polar radius range {rmin:g} to {rmax:g} {xdatum.mapper.unit}")
         radial_scale = options.rscale or "symlog"
-        if rmax == 0:
-            rmax = options.linthresh if radial_scale == "symlog" else 1.0
+        if rmax == rmin:
+            padding = options.linthresh if radial_scale == "symlog" else 1.0
+            rmax += max(padding, rmin * 0.01)
         spatial_axes = (theta, radius)
-        spatial_bounds = ((0, 2 * np.pi), (0, rmax))
+        spatial_bounds = ((0, 2 * np.pi), (rmin, rmax))
         spatial_scales = ("linear", radial_scale)
     else:
         spatial_axes = (xaxis, yaxis)
@@ -605,11 +632,12 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
     # ax.plot(xmax,ymax,'.',alpha=0.0)
 
     if polar:
-        radial_bounds = np.array([0, render_bounds[1][1] * 1.01])
+        radial_bounds = np.array(render_bounds[1])
+        radial_bounds[1] += (radial_bounds[1] - radial_bounds[0]) * 0.01
         if transforms[1] is not None:
             radial_bounds = transforms[1].inverted().transform(radial_bounds)
         ax.set_ylim(radial_bounds)
-        ax.set_rorigin(0)
+        ax.set_rorigin(rmin)
         ax.set_xlim(0, 2 * np.pi)
         ax.grid(True)
     else:
