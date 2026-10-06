@@ -67,6 +67,27 @@ $ shadems <msname>
 $ shadems --xaxis FREQ --yaxis DATA:amp <msname>
 ```
 
+### Symlog uv-coverage
+
+Axis scales are linear by default. To show both short and long baselines on a
+symmetric logarithmic scale, use:
+
+```
+$ shadems --xaxis u --yaxis v --xscale symlog --yscale symlog --linthresh 100 <msname>
+```
+
+`--linthresh` sets the half-width of the linear region around zero: in this
+example, values from -100 to +100 wavelengths remain linear, while larger
+positive and negative values use a base-10 logarithmic scale. It must be a finite
+positive number and defaults to 1. The threshold is in the units of each axis.
+
+`--xscale` and `--yscale` can be set independently to `linear` or `symlog`, and
+apply to all plots in the invocation. Limits (`--xmin`, `--xmax`, `--ymin`,
+`--ymax`), cached limits, colour values, and markup coordinates remain in the
+original data units. Symlog changes the spatial axes, not the colour/intensity
+normalization controlled by `--norm`. Conjugate uv points are still shown unless
+`--noconj` is supplied.
+
 ### Sergeant Colon 
 
 * For complex-valued columns such as in the `DATA` example above, a single component (`amp`, `phase`, `real` or `imag`) must be provided using the colon delimiter. You can also use the 
@@ -217,6 +238,13 @@ Plot types and data sources:
                         plot conjugates).
 
 Plot axes setup:
+  --xscale {linear,symlog}
+                        X-axis scale for all plots (default = linear).
+  --yscale {linear,symlog}
+                        Y-axis scale for all plots (default = linear).
+  --linthresh LINTHRESH
+                        Positive symlog linear-region threshold in axis units
+                        for both axes (default = 1.0).
   --xmin XMIN           Minimum x-axis value (default = data min). For
                         multiple plots, you can give this multiple times, or
                         use a comma-separated list, but note that the clipping

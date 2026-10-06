@@ -15,9 +15,11 @@ import datashader.transfer_functions
 import datashader.reductions
 from datashader.reductions import category_modulo, category_binning
 import numpy as np
+import pandas as pd
 import pylab
 import textwrap
 import matplotlib.cm
+from matplotlib.scale import SymmetricalLogTransform
 from shade_ms import log
 import colorcet
 import cmasher
@@ -35,6 +37,11 @@ def add_options(parser):
 
 def set_options(options):
     pass
+
+
+def _symlog_partition(series, transform):
+    return pd.Series(transform.transform(series.to_numpy()),
+                     index=series.index, name=series.name)
 
 
 def get_colormap(cmap_name):
@@ -316,8 +323,32 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
             size = int(bounds[datum.label][1]) - int(bounds[datum.label][0]) + 1
         canvas_sizes.append(size)
 
-    # create rendering canvas.
-    canvas = datashader.Canvas(canvas_sizes[0], canvas_sizes[1], x_range=bounds[xaxis], y_range=bounds[yaxis])
+    # Rasterize in display coordinates, retaining the original columns for reductions and colours.
+    transforms = []
+    render_axes = []
+    render_bounds = []
+    for dimension, axis in (("x", xaxis), ("y", yaxis)):
+        scale = getattr(options, f"{dimension}scale", "linear")
+        transform = None
+        render_axis = axis
+        axis_bounds = bounds[axis]
+        if scale == "symlog":
+            transform = SymmetricalLogTransform(
+                base=10, linthresh=options.linthresh, linscale=1)
+            render_axis = f"__shadems_{dimension}_symlog"
+            while render_axis in ddf.columns:
+                render_axis += "_"
+            ddf = ddf.assign(**{
+                render_axis: ddf[axis].map_partitions(
+                    _symlog_partition, transform, meta=(render_axis, "float64"))
+            })
+            axis_bounds = tuple(transform.transform(np.asarray(axis_bounds)))
+        transforms.append(transform)
+        render_axes.append(render_axis)
+        render_bounds.append(axis_bounds)
+
+    canvas = datashader.Canvas(canvas_sizes[0], canvas_sizes[1],
+                               x_range=render_bounds[0], y_range=render_bounds[1])
 
     if aaxis is not None:
         agg_alpha = getattr(datashader.reductions, ared, None) if ared else datashader.reductions.count
@@ -395,7 +426,7 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
                 color_labels = [str(bin) for bin in bin_centers]
                 log.info(f": aggregating using {num_colors} bins at {' '.join(color_labels)})")
 
-        raster = canvas.points(ddf, xaxis, yaxis, agg=datashader.by(category, agg_by))
+        raster = canvas.points(ddf, *render_axes, agg=datashader.by(category, agg_by))
         is_integer_raster = np.issubdtype(raster.dtype, np.integer)
 
         # the binning aggregator accumulates flagged points in an extra raster plane
@@ -428,7 +459,7 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
         color_minmax = bounds[caxis]
     else:
         log.debug(f'rasterizing using {ared}')
-        raster = canvas.points(ddf, xaxis, yaxis, agg=agg_alpha)
+        raster = canvas.points(ddf, *render_axes, agg=agg_alpha)
         if not raster.data.any():
             log.info(": no valid data in plot. Check your flags and/or plot limits.")
             return None
@@ -491,14 +522,27 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
     compute_arrays = dict(filter(lambda x: isinstance(x[1], da.Array), limits.items()))
     limits.update(dict(zip(compute_arrays.keys(), da.compute(*compute_arrays.values()))))
 
-    ax.imshow(X=rgb.data, 
-              extent=[limits['xmin'], 
-                      limits['xmax'],
-                      limits['ymin'],
-                      limits['ymax']],
-              aspect='auto',
-              origin='lower',
-              interpolation='nearest')
+    if any(transform is not None for transform in transforms):
+        edges = []
+        for dimension, transform, axis_bounds, size in zip(
+                ("x", "y"), transforms, render_bounds, canvas_sizes):
+            axis_edges = np.linspace(*axis_bounds, size + 1)
+            if transform is not None:
+                axis_edges = transform.inverted().transform(axis_edges)
+                getattr(ax, f"set_{dimension}scale")("symlog", linthresh=options.linthresh)
+            edges.append(axis_edges)
+        ax.pcolormesh(*edges, rgb.data.astype(float) / 255,
+                      shading="flat", rasterized=True)
+        ax.set_aspect("auto")
+    else:
+        ax.imshow(X=rgb.data,
+                  extent=[limits['xmin'],
+                          limits['xmax'],
+                          limits['ymin'],
+                          limits['ymax']],
+                  aspect='auto',
+                  origin='lower',
+                  interpolation='nearest')
 
     ax.set_title("\n".join(textwrap.wrap(title, 90)), loc='center', fontdict=dict(fontsize=options.fontsize))
     ax.set_xlabel(xlabel, fontdict=dict(fontsize=options.fontsize))
@@ -509,6 +553,12 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
     dx, dy = limits['xmax'] - limits['xmin'], limits['ymax'] - limits['ymin']
     ax.set_xlim([limits['xmin'] - dx/100, limits['xmax'] + dx/100])
     ax.set_ylim([limits['ymin'] - dy/100, limits['ymax'] + dy/100])
+    for dimension, transform, axis_bounds in zip(("x", "y"), transforms, render_bounds):
+        if transform is not None:
+            delta = (axis_bounds[1] - axis_bounds[0]) / 100
+            padded_bounds = transform.inverted().transform(
+                np.array([axis_bounds[0] - delta, axis_bounds[1] + delta]))
+            getattr(ax, f"set_{dimension}lim")(padded_bounds)
 
     def decimate_list(x, maxel):
         """Helper function to reduce a list to < given max number of elements, dividing it by decimal factors of 2 and 5"""
@@ -588,4 +638,3 @@ def create_plot(ddf, index_subsets, xdatum, ydatum, adatum, ared, cdatum, cmap, 
     pylab.close()
 
     return pngname
-

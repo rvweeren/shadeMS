@@ -21,6 +21,13 @@ def rstrip_slash(str_):
     return str_.rstrip('/')
 
 
+def positive_float(value):
+    result = float(value)
+    if not numpy.isfinite(result) or result <= 0:
+        raise argparse.ArgumentTypeError("must be a finite number greater than zero")
+    return result
+
+
 def cli():
     description = ("""Rapid Measurement Set plotting with dask-ms and datashader.
                    Version {0:s}"""
@@ -74,6 +81,14 @@ def cli():
         help="Do not show conjugate points in u,v plots (default = plot conjugates).")
 
     group_opts = parser.add_argument_group("Plot axes setup")
+    group_opts.add_argument("--xscale", choices=("linear", "symlog"), default="linear",
+        help="X-axis scale, applied to all plots (default = %(default)s).")
+    group_opts.add_argument("--yscale", choices=("linear", "symlog"), default="linear",
+        help="Y-axis scale, applied to all plots (default = %(default)s).")
+    group_opts.add_argument("--linthresh", type=positive_float, default=1.0,
+        help="""Symlog linear-region threshold for both axes, in their respective axis units.
+             The interval from -linthresh to +linthresh is linear;
+             outside it the scale is logarithmic (default = %(default)s).""")
     group_opts.add_argument("--xmin", action="append",
         help="""Minimum x-axis value (default = data min).
              For multiple plots, you can give this multiple times, or use a comma-separated list,
